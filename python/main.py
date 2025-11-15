@@ -18,79 +18,58 @@ GZIP_HEADER_FLG_FEXTRA = 0x00
 GZIP_HEADER_FLG_FNAME = 0x00
 GZIP_HEADER_FLG_FCOMMENT = 0x00
 
-GZIP_HEADER_MTIME = 0x00000000
+GZIP_HEADER_MTIME = 0x00
 GZIP_HEADER_XFL = 0x00
 GZIP_HEADER_OS = 0x03
+
+def to_gzip_numerical(value, num_bytes):
+
+    if value > 2**(num_bytes * 8):
+        raise ValueError(f"length of bitstream has to be less than {2**(num_bytes * 8)} bit is {value}")
+
+    out_bytes = bytearray()
+
+    for i in range(num_bytes):
+        out_bytes.append(
+            (value >> (8 * i)) & 0xFF
+        )
+
+    return out_bytes
 
 
 def build_header(gzip_compression_method=GZIP_HEADER_CM_DEFLATE):
     
+    out_stream = bytearray()
+
+    out_stream.append(GZIP_HEADER_ID1)
+    out_stream.append(GZIP_HEADER_ID2)
+    out_stream.append(GZIP_HEADER_CM_DEFLATE)
+
     gzip_header_flag = 0x00
-    gzip_header_flag |= GZIP_HEADER_FLG_FTEXT * 0x01
-    gzip_header_flag |= GZIP_HEADER_FLG_FHCRC * 0x02
-    gzip_header_flag |= GZIP_HEADER_FLG_FEXTRA * 0x04
-    gzip_header_flag |= GZIP_HEADER_FLG_FNAME * 0x08
-    gzip_header_flag |= GZIP_HEADER_FLG_FCOMMENT * 0x10
+    gzip_header_flag |= GZIP_HEADER_FLG_FTEXT
+    gzip_header_flag |= GZIP_HEADER_FLG_FHCRC << 1
+    gzip_header_flag |= GZIP_HEADER_FLG_FEXTRA << 2
+    gzip_header_flag |= GZIP_HEADER_FLG_FNAME << 3
+    gzip_header_flag |= GZIP_HEADER_FLG_FCOMMENT << 4
+    out_stream.append(gzip_header_flag)
 
-    header = bytes([
-        GZIP_HEADER_ID1,
-        GZIP_HEADER_ID2,
-        gzip_compression_method,
-        gzip_header_flag,
-        GZIP_HEADER_MTIME,
-        GZIP_HEADER_MTIME,
-        GZIP_HEADER_MTIME,
-        GZIP_HEADER_MTIME,
-        GZIP_HEADER_XFL,
-        GZIP_HEADER_OS
-    ])
+    out_stream += to_gzip_numerical(GZIP_HEADER_MTIME, 4)
 
-    return header
+    out_stream.append(GZIP_HEADER_XFL)
+    out_stream.append(GZIP_HEADER_OS)
+
+    return out_stream
 
 def build_footer(in_stream):
 
     out_stream = bytearray()
 
     crc = zlib.crc32(in_stream)
-
-    out_stream.append(
-        crc & 0xFF
-    )
-
-    out_stream.append(
-        crc >> 8 & 0xFF
-    )
-
-    out_stream.append(
-        (crc >> 16) & 0xFF
-    )
-
-    out_stream.append(
-        (crc >> 24) & 0xFF
-    )
-
+    out_stream += to_gzip_numerical(crc, 4)
 
 
     len_bitstream = len(in_stream)
-
-    if len_bitstream > 0xFFFFFFFF:
-        raise ValueError(f"length of bitstream has to be less than {0xFFFF} bit is {len_bitstream}")
-    
-    out_stream.append(
-        len_bitstream & 0xFF
-    )
-
-    out_stream.append(
-        (len_bitstream >> 8) & 0xFF
-    )
-
-    out_stream.append(
-        (len_bitstream >> 16) & 0xFF
-    )
-
-    out_stream.append(
-        (len_bitstream >> 24) & 0xFF
-    )
+    out_stream += to_gzip_numerical(len_bitstream, 4)
 
     return out_stream
 
@@ -105,41 +84,16 @@ def block_type_0(in_stream, is_last=1):
     block_header |= is_last << 0
     block_header |= block_type  << 1
 
-    print("block_header", block_header)
-
     out_stream.append(block_header)
 
     len_bitstream = len(in_stream)
+    out_stream += to_gzip_numerical(len_bitstream, 2)
+    out_stream += to_gzip_numerical(~len_bitstream, 2)
 
-    if len_bitstream > 0xFFFF:
-        raise ValueError(f"length of bitstream has to be less than {0xFFFF} bit is {len_bitstream}")
-    
-    out_stream.append(
-        len_bitstream & 0x00FF
-    )
-
-    out_stream.append(
-        (len_bitstream >> 8) & 0xFF
-    )
-
-    out_stream.append(
-        (~len_bitstream) & 0xFF
-    )
-
-    out_stream.append(
-        (~len_bitstream >> 8) & 0xFF
-    )
-
-    for byte in in_stream:
-        out_stream.append(byte)
-
+    out_stream += in_stream
 
     return out_stream
     
-    
-
-
-
 
 if __name__== "__main__":
     print("starting main ..")
@@ -155,7 +109,7 @@ if __name__== "__main__":
 
     print("bitstream:")
     for byte in out_stream:
-        print(hex(byte), bin(byte), byte)
+        print("0b" + ("00000000" + str(bin(byte))[2:])[-8:],hex(byte),  byte)
 
     with open(OUT_FILE_PATH, "wb") as file:
         file.write(out_stream)
