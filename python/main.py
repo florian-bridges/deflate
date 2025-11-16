@@ -1,6 +1,8 @@
 
 import zlib
 
+from python.BitStream import BitStream
+
 
 IN_FILE_PATH = "data/hello_world.txt"
 OUT_FILE_PATH = "test_out/hello_world.txt.gz"
@@ -187,32 +189,23 @@ def block_type_1(in_stream, is_last=1):
     tree_codes, tree_lengths = get_huffman_codes()
     
     block_type = 1
-    out_stream = bytearray()
+    out_stream = BitStream()
 
-    block_header = 0x00
-    block_header |= is_last << 0
-    block_header |= block_type  << 1
-    new_byte = block_header
-    bit_idx = 3
+    out_stream.append(
+        is_last
+    )
 
-    in_stream = [int(byte) for byte in in_stream]
-    for byte in in_stream + [256]:
+    out_stream.append(
+        block_type, 2
+    )
+
+    # add block termination token
+    byte_stream = [int(byte) for byte in in_stream] + [256]
+    for byte in byte_stream:
         code = reverse_bits(tree_codes[byte],tree_lengths[byte]) 
-        for _ in range(tree_lengths[byte]):
-            if bit_idx == 8:
-                out_stream.append(new_byte)
-                new_byte = 0x00
-                bit_idx = 0
-            
-            new_byte |= (code & 0x01) << bit_idx
-
-            bit_idx += 1
-            code = (code >> 1)
-    out_stream.append(new_byte)
- 
-    return out_stream
-
-
+        out_stream.append(code, tree_lengths[byte])
+         
+    return out_stream.get()
 
 
 if __name__== "__main__":
