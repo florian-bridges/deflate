@@ -4,8 +4,8 @@ import zlib
 from python.BitStream import BitStream
 
 
-IN_FILE_PATH = "data/hello_world.txt"
-OUT_FILE_PATH = "test_out/hello_world.txt.gz"
+IN_FILE_PATH = "data/lorem_ipsum.txt"
+OUT_FILE_PATH = "test_out/lorem_ipsum.txt.gz"
 
 
 # gzip file header variables
@@ -37,7 +37,9 @@ LENGTH_CODE_RANGES = [
 LENGTH_CODES = {}
 for code, num_bits, lower_bound, upper_bound in LENGTH_CODE_RANGES:
     for i in range(upper_bound - lower_bound + 1):
-        LENGTH_CODES[lower_bound + i] = (lower_bound, i)
+        LENGTH_CODES[lower_bound + i] = (code, num_bits, i)
+
+MAX_REF_LENGTH = 258
 
 # Compact representation of the distance code value (0-31), distance range and number
 # of extra bits to use in LZ77 compression (See Section 3.2.5 of RFC 1951)
@@ -52,7 +54,9 @@ DISTANCE_CODE_RANGES = [
 DISTANCE_CODES = {}
 for code, num_bits, lower_bound, upper_bound in DISTANCE_CODE_RANGES:
     for i in range(upper_bound - lower_bound + 1):
-        DISTANCE_CODES[lower_bound + i] = (lower_bound, i)
+        DISTANCE_CODES[lower_bound + i] = (code, num_bits, i)
+
+MAX_REF_DISTANCE = 32768
 
 def to_gzip_numerical(value, num_bytes):
 
@@ -177,6 +181,36 @@ def get_huffman_codes():
         
     return tree_codes, tree_lengths
 
+def get_distance_codes():
+
+    tree_lengths = {}
+    for i in range(32769):
+        tree_lengths[i] = 5
+    
+
+    bl_count = {}
+    for i in range(5):
+        bl_count[i] = 0
+
+    bl_count[5] = 32769
+    
+    code = 0
+
+    next_code = {}
+    for bits in range(1, len(bl_count.keys())):
+        code += bl_count[bits-1]
+        code <<= 1
+        next_code[bits] = code
+
+    tree_codes = {}
+    for n in range(288):
+        tree_len = tree_lengths[n]
+        if tree_len > 0:
+            tree_codes[n] = next_code[tree_len]
+            next_code[tree_len] += 1
+        
+    return tree_codes, tree_lengths
+
 def reverse_bits(value, width):
     result = 0
     for _ in range(width):
@@ -187,6 +221,7 @@ def reverse_bits(value, width):
 def block_type_1(in_stream, is_last=1):
 
     tree_codes, tree_lengths = get_huffman_codes()
+    distance_codes, distance_lengths = get_distance_codes()
     
     block_type = 1
     out_stream = BitStream()
@@ -194,17 +229,57 @@ def block_type_1(in_stream, is_last=1):
     out_stream.append(
         is_last
     )
-
     out_stream.append(
         block_type, 2
     )
 
     # add block termination token
     byte_stream = [int(byte) for byte in in_stream] + [256]
-    for byte in byte_stream:
-        code = reverse_bits(tree_codes[byte],tree_lengths[byte]) 
-        out_stream.append(code, tree_lengths[byte])
-         
+
+    byte_idx = 0
+    while byte_idx < len(byte_stream):
+
+        byte = byte_stream[byte_idx]
+
+        ref_dist = 3
+        ref_length = 0
+        while ref_dist >= 0:
+
+            if ref_dist > byte_idx or ref_dist >= MAX_REF_DISTANCE:
+                break
+
+            ref_length = 0
+
+            while byte_stream[byte_idx + ref_length] == byte_stream[byte_idx - ref_dist + ref_length]:
+
+                if ref_length >= len(byte_stream) or ref_length > MAX_REF_LENGTH:
+                    break
+
+                ref_length += 1
+
+            if ref_length >= 3:
+                break
+
+            ref_dist += 1
+            
+        if ref_length < 3:
+            code = reverse_bits(tree_codes[byte],tree_lengths[byte]) 
+            out_stream.append(code, tree_lengths[byte])
+            byte_idx += 1
+        else:
+            label, num_bits, offset = LENGTH_CODES[ref_length]
+            code = reverse_bits(tree_codes[label],tree_lengths[label])
+            out_stream.append(code, tree_lengths[label])
+            out_stream.append(offset, num_bits)
+
+            label, num_bits, offset = DISTANCE_CODES[ref_dist]
+            code = reverse_bits(distance_codes[label],distance_lengths[label])
+            out_stream.append(code, distance_lengths[label])
+            out_stream.append(offset, num_bits)
+
+            byte_idx += ref_length
+
+
     return out_stream.get()
 
 
