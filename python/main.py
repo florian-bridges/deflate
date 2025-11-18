@@ -1,5 +1,6 @@
 
 import zlib
+import heapq
 
 from python.BitStream import BitStream
 
@@ -7,8 +8,8 @@ from python.BitStream import BitStream
 IN_FILE_PATH = "data/hello_world.txt"
 OUT_FILE_PATH = "test_out/hello_world.txt.gz"
 
-#IN_FILE_PATH = "data/lorem_ipsum.txt"
-#OUT_FILE_PATH = "test_out/lorem_ipsum.txt.gz"
+IN_FILE_PATH = "data/lorem_ipsum.txt"
+OUT_FILE_PATH = "test_out/lorem_ipsum.txt.gz"
 
 
 # gzip file header variables
@@ -27,7 +28,7 @@ GZIP_HEADER_MTIME = 0x00
 GZIP_HEADER_XFL = 0x00
 GZIP_HEADER_OS = 0x03
 
-# Compact representation of the length code value (257-285), length range and number
+# Compact representation of the len code value (257-285), len range and number
 # of extra bits to use in LZ77 compression (See Section 3.2.5 of RFC 1951)
 LENGTH_CODE_RANGES = [
     [257,0,3,3],     [258,0,4,4],     [259,0,5,5],     [260,0,6,6],     [261,0,7,7],
@@ -42,7 +43,7 @@ for code, num_bits, lower_bound, upper_bound in LENGTH_CODE_RANGES:
     for i in range(upper_bound - lower_bound + 1):
         LENGTH_CODES[lower_bound + i] = (code, num_bits, i)
 
-MAX_REF_LENGTH = 258
+MAX_REF_LEN = 258
 
 # Compact representation of the distance code value (0-31), distance range and number
 # of extra bits to use in LZ77 compression (See Section 3.2.5 of RFC 1951)
@@ -60,6 +61,8 @@ for code, num_bits, lower_bound, upper_bound in DISTANCE_CODE_RANGES:
         DISTANCE_CODES[lower_bound + i] = (code, num_bits, i)
 
 MAX_REF_DISTANCE = 32768
+
+CL_INDEX = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15]
 
 
 def build_header():
@@ -107,22 +110,27 @@ def block_type_0(in_stream, is_last=1):
 
     return out_stream.get() + in_stream
 
-def get_huffman_codes(length_list):
+def get_code_lens(len_list):
+
+    code_lens = {}
+
+    for from_label, to_label, num_bits in len_list:
+        for label in range(from_label, to_label + 1):
+            code_lens[label] = num_bits
+
+    return code_lens
+
+def get_prefix_codes(tree_lens):
 
     bl_count = {}
-    tree_lengths = {}
-
+    
     max_num_bits = 0
 
-    for from_label, to_label, num_bits in length_list:
-
-        for label in range(from_label, to_label + 1):
-            tree_lengths[label] = num_bits
-
+    for _, num_bits in tree_lens.items():
         if num_bits not in bl_count.keys():
-            bl_count[num_bits] = to_label - from_label + 1
+            bl_count[num_bits] = 1
         else:
-            bl_count[num_bits] += to_label - from_label + 1
+            bl_count[num_bits] += 1
 
         max_num_bits = max(max_num_bits, num_bits)
 
@@ -134,64 +142,93 @@ def get_huffman_codes(length_list):
         next_code[bits] = code
 
     tree_codes = {}
-    for n in range(len(tree_lengths)):
-        tree_len = tree_lengths[n]
+    for n in range(len(tree_lens)):
+        tree_len = tree_lens[n]
         if tree_len > 0:
             tree_codes[n] = next_code[tree_len]
             next_code[tree_len] += 1
         
-    return tree_codes, tree_lengths
+    return tree_codes
 
 
-def get_default_codes():
+def get_default_ll_codes():
     # from_label, to_label, num_bits
-    length_list = [
+    len_list = [
         (0, 143, 8),
         (144, 255, 9),
         (256, 279, 7),
         (280, 287, 8),
     ]
+    tree_lens = get_code_lens(len_list)
+    return get_prefix_codes(tree_lens), tree_lens
 
-    return get_huffman_codes(length_list)
-
-def get_distance_codes():
+def get_default_distance_codes():
     # from_label, to_label, num_bits
-    length_list = [
+    len_list = [
         (0, 32768, 5),
     ]
-
-    return get_huffman_codes(length_list)
+    tree_lens = get_code_lens(len_list)
+    return get_prefix_codes(tree_lens), tree_lens
 
 
 def find_reference(byte_stream, byte_idx):
     ref_dist = 3
-    ref_length = 0
+    ref_len = 0
     while ref_dist >= 0:
 
         if ref_dist > byte_idx or ref_dist >= MAX_REF_DISTANCE:
             break
 
-        ref_length = 0
+        ref_len = 0
 
-        while byte_stream[byte_idx + ref_length] == byte_stream[byte_idx - ref_dist + ref_length]:
+        while byte_stream[byte_idx + ref_len] == byte_stream[byte_idx - ref_dist + ref_len]:
 
-            if ref_length >= len(byte_stream) or ref_length > MAX_REF_LENGTH:
+            if ref_len >= len(byte_stream) or ref_len > MAX_REF_LEN:
                 break
 
-            ref_length += 1
+            ref_len += 1
 
-        if ref_length >= 3:
+        if ref_len >= 3:
             break
 
         ref_dist += 1
-    return ref_length, ref_dist
+    return ref_len, ref_dist
 
-    
+def encode_byte_stream(byte_stream, out_stream, ll_codes, ll_lens, dist_codes, dist_lens):
+    byte_idx = 0
+    while byte_idx < len(byte_stream):
+        byte = byte_stream[byte_idx]
+
+        ref_len, ref_dist = find_reference(byte_stream, byte_idx)        
+            
+        if ref_len >= 3:
+
+            len_label, len_num_bits, len_offset = LENGTH_CODES[ref_len]
+            dist_label, dist_num_bits, dist_offset = DISTANCE_CODES[ref_dist]
+
+            total_ref_size = ll_lens[len_label] + len_num_bits + dist_lens[dist_label] + dist_num_bits
+            if 8 * ref_len > total_ref_size:
+
+                out_stream.append_reverse(ll_codes[len_label], ll_lens[len_label])
+                out_stream.append(len_offset, len_num_bits)
+
+                out_stream.append_reverse(dist_codes[dist_label], dist_lens[dist_label])
+                out_stream.append(dist_offset, dist_num_bits)
+
+                byte_idx += ref_len
+                continue
+            
+ 
+        out_stream.append_reverse(ll_codes[byte], ll_lens[byte])
+        byte_idx += 1
+
+    return out_stream
+
 
 def block_type_1(in_stream, is_last=1):
 
-    tree_codes, tree_lengths = get_default_codes()
-    distance_codes, distance_lengths = get_distance_codes()
+    ll_codes, ll_lens = get_default_ll_codes()
+    dist_codes, dist_lens = get_default_distance_codes()
     
     block_type = 1
     out_stream = BitStream()
@@ -202,32 +239,174 @@ def block_type_1(in_stream, is_last=1):
     # add block termination token
     byte_stream = [int(byte) for byte in in_stream] + [256]
 
+    out_stream = encode_byte_stream(byte_stream, out_stream, ll_codes, ll_lens, dist_codes, dist_lens)
+
+    return out_stream.get()
+
+# todo limit len
+def huffman_canonical(symbol_freqs):
+  
+    heap = [(freq, [symbol]) for symbol, freq in symbol_freqs.items() if freq > 0]
+    heapq.heapify(heap)
+
+    code_lens = {symbol:0 for symbol in symbol_freqs.keys()}
+
+    if len(heap) == 1:
+        _, symbols = heap[0]
+        code_lens[symbols[0]] = 1
+        return code_lens
+    
+    while len(heap) > 1:
+        freq_1, symbols_1 = heapq.heappop(heap)
+        freq_2, symbols_2 = heapq.heappop(heap)
+
+        for symbol in symbols_1 + symbols_2:
+            code_lens[symbol] += 1
+
+        heapq.heappush(heap, (freq_1 + freq_2, symbols_1 + symbols_2))
+
+    return code_lens
+
+def get_symbol_freqs(codes, max_code):
+    freqs = {code:0 for code in range(max_code + 1)}
+    for code, _, _ in codes:
+        freqs[code] += 1
+    
+    return freqs
+        
+def get_ll_and_distance_codes(byte_stream):
+
+    ll_freqs = {symbol:0 for symbol in range(288)}
+    dist_freqs = {symbol:0 for symbol in range(32)}
+
     byte_idx = 0
     while byte_idx < len(byte_stream):
         byte = byte_stream[byte_idx]
 
-        ref_length, ref_dist = find_reference(byte_stream, byte_idx)        
+        ref_len, ref_dist = find_reference(byte_stream, byte_idx)        
             
-        if ref_length >= 3:
+        if ref_len >= 3:
 
-            len_label, len_num_bits, len_offset = LENGTH_CODES[ref_length]
-            dist_label, dist_num_bits, dist_offset = DISTANCE_CODES[ref_dist]
+            len_label, _, _ = LENGTH_CODES[ref_len]
+            dist_label, _, _ = DISTANCE_CODES[ref_dist]
 
-            total_ref_size = tree_lengths[len_label] + len_num_bits + distance_lengths[dist_label] + dist_num_bits
-            if 8 * ref_length > total_ref_size:
-
-                out_stream.append_reverse(tree_codes[len_label], tree_lengths[len_label])
-                out_stream.append(len_offset, len_num_bits)
-
-                out_stream.append_reverse(distance_codes[dist_label], distance_lengths[dist_label])
-                out_stream.append(dist_offset, dist_num_bits)
-
-                byte_idx += ref_length
-                continue
+            ll_freqs[len_label] += 1
+            dist_freqs[dist_label] += 1
+            byte_idx += ref_len
+            continue
             
  
-        out_stream.append_reverse(tree_codes[byte], tree_lengths[byte])
+        ll_freqs[byte] += 1
         byte_idx += 1
+
+    ll_lens = huffman_canonical(ll_freqs)
+    dist_lens = huffman_canonical(dist_freqs)
+
+    ll_codes = get_prefix_codes(ll_lens)
+    dist_codes = get_prefix_codes(dist_lens)
+
+    return ll_codes, ll_lens, dist_codes, dist_lens
+
+def remove_trailing_zeros(code_lens):
+
+    short_code_lens = code_lens.copy()
+    for key in range(len(short_code_lens) -1 , 0, -1):
+        if short_code_lens[key] != 0:
+            break
+
+        short_code_lens.pop(key, None)
+
+    return short_code_lens
+
+def get_code_encodings(code_labels):
+
+    code_encodings = []
+    byte_idx = 0
+    while byte_idx < len(code_labels):
+
+        current_byte = code_labels[byte_idx]
+
+        repeat_idx = 0
+        while byte_idx + repeat_idx + 1 < len(code_labels):
+            if code_labels[byte_idx + repeat_idx + 1] == current_byte:
+                repeat_idx += 1
+                continue
+            break
+        
+        byte_idx += 1 + repeat_idx            
+
+        if current_byte == 0 and repeat_idx >= 3:
+            while repeat_idx > 0:
+                if repeat_idx >= 11:
+
+                    sequence_len = min(repeat_idx + 1, 138)
+                    code_encodings.append((18, sequence_len -11, 7))
+                    repeat_idx -= sequence_len
+                    continue
+
+                sequence_len = min(repeat_idx  + 1, 10)
+                code_encodings.append((17, sequence_len -3, 3))
+                repeat_idx -= sequence_len
+                
+
+        else:
+            code_encodings.append((current_byte, 0, 0))
+            while repeat_idx > 0:
+
+                if repeat_idx >= 3:
+                    sequence_len = min(repeat_idx, 6)
+                    code_encodings.append((16, sequence_len -3 , 2))
+                    repeat_idx -= sequence_len
+                    continue
+
+                code_encodings.append((current_byte, 0, 0))
+                repeat_idx -= 1
+    
+    return code_encodings
+
+def block_type_2(in_stream, is_last=1):
+    
+    block_type = 2
+    out_stream = BitStream()
+
+    out_stream.append(is_last)
+    out_stream.append(block_type, 2)
+
+    # add block termination token
+    byte_stream = [int(byte) for byte in in_stream] + [256]
+    
+    ll_codes, ll_lens, dist_codes, dist_lens = get_ll_and_distance_codes(byte_stream)
+
+    ll_lens_short = remove_trailing_zeros(ll_lens)
+    dist_lens_short = remove_trailing_zeros(dist_lens)
+
+    code_encodings = get_code_encodings(list(ll_lens_short.values()) + list(dist_lens_short.values()) )
+
+    cl_symbol_freqs = get_symbol_freqs(code_encodings, 18)
+    cl_code_lens = huffman_canonical(cl_symbol_freqs)
+    cl_codes =  get_prefix_codes(cl_code_lens)
+
+
+    hlit = len(ll_lens_short) - 257
+    hdist = len(dist_lens_short) -1
+    hclen = 19 - 4
+
+    out_stream.append(hlit, 5)
+    out_stream.append(hdist, 5)
+    out_stream.append(hclen, 4)
+    
+    
+    for cl_idx in CL_INDEX:
+        if cl_idx not in cl_codes.keys():
+            out_stream.append(0, 3)
+            continue
+        out_stream.append(cl_code_lens[cl_idx], 3)
+        
+    for label, repeat, num_bits in code_encodings:
+        out_stream.append_reverse(cl_codes[label], cl_code_lens[label])
+        out_stream.append(repeat, num_bits)
+        
+    out_stream = encode_byte_stream(byte_stream, out_stream, ll_codes, ll_lens, dist_codes, dist_lens)
 
     return out_stream.get()
 
@@ -239,7 +418,7 @@ if __name__== "__main__":
         in_stream = file.read()
     
     header = build_header()
-    payload = block_type_1(in_stream=in_stream, is_last=1)
+    payload = block_type_2(in_stream=in_stream, is_last=1)
     footer = build_footer(in_stream)
 
     out_stream = header + payload + footer
@@ -250,3 +429,4 @@ if __name__== "__main__":
 
     with open(OUT_FILE_PATH, "wb") as file:
         file.write(out_stream)
+    
