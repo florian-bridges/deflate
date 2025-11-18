@@ -1,6 +1,8 @@
 
 import zlib
 import heapq
+import argparse
+from pathlib import Path
 
 from python.BitStream import BitStream
 
@@ -389,7 +391,7 @@ def block_type_2(in_stream, is_last=1):
 
     hlit = len(ll_lens_short) - 257
     hdist = len(dist_lens_short) -1
-    hclen = 19 - 4
+    hclen = 19 - 4 # todo
 
     out_stream.append(hlit, 5)
     out_stream.append(hdist, 5)
@@ -412,13 +414,55 @@ def block_type_2(in_stream, is_last=1):
 
 
 if __name__== "__main__":
-    print("starting main ..")
+    print("starting deflate ..")
 
-    with open(IN_FILE_PATH, "rb") as file:
+    parser = argparse.ArgumentParser(description="Custom DEFLATE compressor")
+
+    parser.add_argument(
+        "input",
+        help="Path to input file"
+    )
+
+    parser.add_argument(
+        "--output",
+        default=None,
+        help="Output file path (optional)"
+    )
+
+    parser.add_argument(
+        "--block-type",
+        choices=["auto", "0", "1", "2"],
+        default="auto",
+        help="DEFLATE block type to use"
+    )
+
+    args = parser.parse_args()
+
+    input_path = Path(args.input)
+
+    # Default output path if not provided
+    if args.output is None:
+        output_path = input_path.with_suffix(input_path.suffix + ".deflate")
+    else:
+        output_path = Path(args.output)
+
+    input_file_path = ""
+
+    with open(input_path, "rb") as file:
         in_stream = file.read()
     
     header = build_header()
-    payload = block_type_2(in_stream=in_stream, is_last=1)
+
+    if args.block_type == "auto":
+        payload = block_type_2(in_stream=in_stream, is_last=1)
+    elif args.block_type == "0":
+        payload = block_type_0(in_stream=in_stream, is_last=1)
+    elif args.block_type == "1":
+        payload = block_type_1(in_stream=in_stream, is_last=1)
+    elif args.block_type == "2":
+        payload = block_type_2(in_stream=in_stream, is_last=1)
+
+
     footer = build_footer(in_stream)
 
     out_stream = header + payload + footer
@@ -427,6 +471,6 @@ if __name__== "__main__":
     for byte in out_stream:
         print("0b" + ("00000000" + str(bin(byte))[2:])[-8:],hex(byte),  byte)
 
-    with open(OUT_FILE_PATH, "wb") as file:
+    with open(output_path, "wb") as file:
         file.write(out_stream)
     
