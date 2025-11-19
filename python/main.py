@@ -304,6 +304,9 @@ def get_ll_and_distance_codes(byte_stream):
     ll_lens = huffman_canonical(ll_freqs)
     dist_lens = huffman_canonical(dist_freqs)
 
+    ll_lens = limit_code_lengths(ll_lens, 288, 15)
+    dist_lens = limit_code_lengths(dist_lens, 32, 15)
+
     ll_codes = get_prefix_codes(ll_lens)
     dist_codes = get_prefix_codes(dist_lens)
 
@@ -366,6 +369,30 @@ def get_code_encodings(code_labels):
     
     return code_encodings
 
+def limit_code_lengths(code_lengths, num_symbols, max_lengths):
+    
+    k = 0
+    maxk = (1 << max_lengths) - 1
+
+    for i in range(num_symbols - 1, -1, -1):
+        code_lengths[i] = min(code_lengths[i], max_lengths)
+        k += 1 << (max_lengths - code_lengths[i])
+
+    for i in range(num_symbols - 1, -1, -1):
+        if k <= maxk:
+            break
+        while code_lengths[i] < max_lengths and k > maxk:
+            code_lengths[i] += 1
+            k -= 1 << (max_lengths - code_lengths[i])
+
+    for i in range(num_symbols):
+        while k + (1 << (max_lengths - code_lengths[i])) <= maxk:
+            k += 1 << (max_lengths - code_lengths[i])
+            code_lengths[i] -= 1
+
+    return code_lengths
+
+
 def block_type_2(in_stream, is_last=1):
     
     block_type = 2
@@ -386,6 +413,7 @@ def block_type_2(in_stream, is_last=1):
 
     cl_symbol_freqs = get_symbol_freqs(code_encodings, 18)
     cl_code_lens = huffman_canonical(cl_symbol_freqs)
+    cl_code_lens = limit_code_lengths(cl_code_lens, 19, 7)
     cl_codes =  get_prefix_codes(cl_code_lens)
 
 
@@ -412,6 +440,39 @@ def block_type_2(in_stream, is_last=1):
 
     return out_stream.get()
 
+def main(input_path, output_path=None, block_type="auto"):
+    # Default output path if not provided
+    if output_path is None:
+        output_path = input_path.with_suffix(input_path.suffix + ".deflate")
+    else:
+        output_path = Path(output_path)
+
+
+    with open(Path(input_path), "rb") as file:
+        in_stream = file.read()
+    
+    header = build_header()
+
+    if block_type == "auto":
+        payload = block_type_2(in_stream=in_stream, is_last=1)
+    elif block_type == "0":
+        payload = block_type_0(in_stream=in_stream, is_last=1)
+    elif block_type == "1":
+        payload = block_type_1(in_stream=in_stream, is_last=1)
+    elif block_type == "2":
+        payload = block_type_2(in_stream=in_stream, is_last=1)
+
+
+    footer = build_footer(in_stream)
+
+    out_stream = header + payload + footer
+
+    print("bitstream:")
+    for byte in out_stream:
+        print("0b" + ("00000000" + str(bin(byte))[2:])[-8:], chr(byte), hex(byte),  byte)
+
+    with open(output_path, "wb") as file:
+        file.write(out_stream)
 
 if __name__== "__main__":
     print("starting deflate ..")
@@ -438,39 +499,7 @@ if __name__== "__main__":
 
     args = parser.parse_args()
 
-    input_path = Path(args.input)
+    main(args.input, args.output, args.block_type)
 
-    # Default output path if not provided
-    if args.output is None:
-        output_path = input_path.with_suffix(input_path.suffix + ".deflate")
-    else:
-        output_path = Path(args.output)
-
-    input_file_path = ""
-
-    with open(input_path, "rb") as file:
-        in_stream = file.read()
     
-    header = build_header()
-
-    if args.block_type == "auto":
-        payload = block_type_2(in_stream=in_stream, is_last=1)
-    elif args.block_type == "0":
-        payload = block_type_0(in_stream=in_stream, is_last=1)
-    elif args.block_type == "1":
-        payload = block_type_1(in_stream=in_stream, is_last=1)
-    elif args.block_type == "2":
-        payload = block_type_2(in_stream=in_stream, is_last=1)
-
-
-    footer = build_footer(in_stream)
-
-    out_stream = header + payload + footer
-
-    print("bitstream:")
-    for byte in out_stream:
-        print("0b" + ("00000000" + str(bin(byte))[2:])[-8:],hex(byte),  byte)
-
-    with open(output_path, "wb") as file:
-        file.write(out_stream)
     
