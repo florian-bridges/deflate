@@ -1,88 +1,85 @@
 #include <fcntl.h>
 #include <stdio.h>
-#include <stdlib.h>   /* exit */
-#include <string.h>   /* memcpy */
-#include <sys/mman.h> /* mmap() is defined in this header */
+#include <stdlib.h>  
+#include <string.h>  
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <unistd.h> /* lseek, write, close */
+#include <unistd.h>
+#include <zlib.h>
+
+#include "bitstream.h"
 
 void err_quit(const char *msg) {
     fprintf(stderr, "%s", msg);
     exit(1);
 }
 
-char * get_mmap(size_t file_size, int prot, int fd){
 
-    char * mem_map; 
+void write_header(BitStream *stream){
+    append_numerical(stream, 0x1f, 1);
+    append_numerical(stream, 0x8b, 1);
+    append_numerical(stream, 0x08, 1);
+    append(stream, 0, 8);
+    append_numerical(stream, 0, 4);
+    append_numerical(stream, 0, 1);
+    append_numerical(stream, 0x03, 1);
+}
 
-    mem_map = mmap(0, file_size, prot, MAP_SHARED, fd, 0);
-    if (mem_map == MAP_FAILED) {
-        printf("mmap error for input");
-        return 0;
+void block_type_0(BitStream *stream, unsigned char* src, size_t file_size, u_int8_t is_last){
+    
+    u_int8_t block_type = 0;
+    
+    append(stream, is_last, 1);
+    append(stream, block_type, 2);
+    append(stream, 0, 5);
+    append_numerical(stream, file_size, 2);
+    append_numerical(stream, ~file_size, 2);
+
+    for (size_t i = 0; i < file_size; i++) {
+        char c = src[i];
+        append(stream, c, 8);   
     }
-
-    return mem_map;
 
 }
 
+void write_footer(BitStream *stream, unsigned char * src, size_t file_size){
+    u_int32_t crc = crc32(0L, Z_NULL, 0);
+    crc = crc32(crc, src, file_size);
+    append_numerical(stream, crc, 4);
+    append_numerical(stream, file_size, 4);
+    append_numerical(stream, ~file_size, 4);
+}
+
 int main(int argc, char *argv[]) {
-    int fdin, fdout;
-    char *src, *dst;
+    int fdin;
+    unsigned char *src;
     struct stat statbuf;
-    int mode = 0777;
 
     if (argc != 3) err_quit("usage: deflate <fromfile> <tofile>");
 
-    /* open the input file */
+    printf("starting deflate ..\n");
+
     fdin = open(argv[1], O_RDONLY);
     if (fdin < 0) {
         printf("can't open %s for reading", argv[1]);
         return 0;
     }
 
-    /* open/create the output file */
-    fdout = open(argv[2], O_RDWR | O_CREAT | O_TRUNC, mode);
-    if (fdout < 0) {
-        printf("can't create %s for writing", argv[2]);
-        return 0;
-    }
-
-    /* find size of input file */
     if (fstat(fdin, &statbuf) < 0) {
         printf("fstat error");
         return 0;
     }
 
-    /* go to the location corresponding to the last byte */
-    if (lseek(fdout, statbuf.st_size - 1, SEEK_SET) == -1) {
-        printf("lseek error");
-        return 0;
-    }
-
-    /* write a dummy byte at the last location */
-    if (write(fdout, "", 1) != 1) {
-        printf("write error");
-        return 0;
-    }
-
-    
-    /* mmap the input file */
     src = get_mmap(statbuf.st_size, PROT_READ, fdin);
+    BitStream stream = get_write_stream(argv[2]);
+        
 
-    /* mmap the output file */
-    dst = get_mmap(statbuf.st_size, PROT_READ | PROT_WRITE, fdout);
-
-    for (size_t i = 0; i < statbuf.st_size; i++) {
-        char c = src[i];  // get the i-th byte
-        printf("Byte %zu: %c (0x%02x)\n", i, 
-               (c >= 32 && c <= 126) ? c : '.',  // printable or dot
-               (unsigned char)c);                 // show hex value
-
-        dst[i] = src[i];
-    }
-
+    write_header(&stream);
+    block_type_0(&stream, src, statbuf.st_size, 0x01);
+    write_footer(&stream, src, statbuf.st_size);
+    cut_stream(&stream);
 
     return 0;
 
-} /* main */
+}
