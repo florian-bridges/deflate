@@ -69,6 +69,18 @@ void grow_stream(BitStream *stream){
     stream->max_size = new_max_size;
 }
 
+void jump_to_next_byte(BitStream *stream){
+        if (stream->bitpos > 0) {
+        stream->bitpos = 0;
+        stream->bytepos++;
+
+        if (stream->bytepos == stream->max_size) {  
+            grow_stream(stream);
+        }
+        *(stream->start + stream->bytepos) = 0;
+    }  
+}
+
 void cut_stream(BitStream *stream){
     size_t stream_size = stream->bytepos + 1; 
     ftruncate(stream->fd, stream_size);
@@ -122,8 +134,7 @@ void append_reverse(BitStream *stream, uint16_t bits, uint16_t num_bits){
 }
 
 
-void append_numerical(BitStream *stream, uint32_t bits, uint16_t num_bytes){
-    
+void append_numerical(BitStream *stream, uint32_t bits, uint16_t num_bytes){    
     for(int i = 0; i < num_bytes; i++){
         append(stream, bits >> (8*i) & 0xFF, 8);
     }
