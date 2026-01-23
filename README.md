@@ -1,5 +1,5 @@
 # deflate
-An implementation of the deflate algorithm in C
+An implementation of the deflate algorithm in python, c, and rust
 
 ## analyze bitstream
 [source] (https://github.com/billbird/gzstat)
