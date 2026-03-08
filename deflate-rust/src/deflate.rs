@@ -1,7 +1,10 @@
-use std::io::{Result, BufReader, Error, ErrorKind};
+use std::io::{Result, BufReader, Error, ErrorKind, Read};
 use std::io::{BufWriter};
 use std::fs::File;
 use crc32fast::Hasher;
+use std::collections::HashMap;
+use std::mem::ManuallyDrop;
+use std::cmp::{min, max};
 
 use crate::bitstream::BitStream;
 use crate::block_type_0::write_block_type_0;
@@ -9,6 +12,93 @@ use crate::block_type_1::write_block_type_1;
 
 const USED_BLOCK_TYPE: u32 = 1;
 
+const MAX_REF_DISTANCE: usize = 32768;
+const MAX_REF_LEN: usize = 258;
+
+// generic helper functions
+pub fn get_prefix_codes(code_lens: &[u32], num_codes: usize) -> Vec<u32> {
+    let mut bl_count : HashMap<u32, u32> = HashMap::new();
+    let mut max_num_bits = 0; 
+
+    for num_bits in code_lens {
+        *bl_count.entry(*num_bits).or_insert(0) += 1;
+        max_num_bits = max(max_num_bits, *num_bits); 
+    }
+
+    let mut code = 0; 
+    let mut next_code: HashMap<u32, u32> = HashMap::new();
+
+    for bits in 1..=max_num_bits {
+        code += bl_count.get(&(bits - 1)).unwrap_or(&0);
+        code <<= 1; 
+        next_code.insert(bits, code); 
+    }
+
+    let mut prefix_codes = vec![0u32; num_codes];
+    for (label, &tree_len) in code_lens.iter().enumerate() {
+        if tree_len == 0 {
+            continue;
+        }
+        prefix_codes[label] =  *next_code.get(&tree_len).unwrap();
+        *next_code.entry(tree_len).or_insert(0) += 1;
+    }
+
+    return prefix_codes; 
+}
+
+
+pub fn encode_byte_stream(
+    in_stream: &mut BufReader<File>, 
+    out_stream: &mut BitStream, 
+    num_unparsed_bytes: u64,
+    hasher: &mut Hasher, 
+    ll_codes: &[u32],
+    ll_lens: &[u32],
+    dist_codes: &[u32],
+    dist_lens: &[u32],
+) -> Result<()> {
+
+    // todo change for dynamic block sizes
+    let block_size = num_unparsed_bytes; 
+
+    //payload
+    let mut parsed_bytes = 0; 
+    let mut byte_buffer = vec![0u8; MAX_REF_DISTANCE + MAX_REF_LEN];
+    
+    let mut buffer_idx = 0;
+    let mut buffer_max = in_stream.read(&mut byte_buffer)?; 
+
+    while parsed_bytes < block_size {
+
+        while buffer_idx < buffer_max {
+
+            let byte = byte_buffer[buffer_idx];
+            BitStream::append_reverse(out_stream, ll_codes[byte as usize], ll_lens[byte as usize])?;
+
+            println!(
+                "hex: 0x{:02X} | dec: {:3} | char: {}",
+                byte,
+                byte,
+                byte as char
+            );
+
+            buffer_idx += 1; 
+            parsed_bytes += 1; 
+        }
+
+        hasher.update(&byte_buffer[0..buffer_idx]);
+
+        byte_buffer.copy_within(buffer_idx..buffer_max, 0);
+        buffer_max -= buffer_idx;
+        buffer_idx = 0;
+
+        let bytes_read = in_stream.read(&mut byte_buffer[buffer_max..])?;
+        buffer_max += bytes_read;
+
+    }
+
+    Ok(())
+}
 
 fn build_gzip_header(bitstream: &mut BitStream) -> Result<()>{
 
