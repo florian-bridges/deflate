@@ -2,6 +2,7 @@ use std::env;
 mod bitstream;
 mod block_type_0;
 mod block_type_1;
+mod block_type_2;
 
 mod deflate;
 use deflate::{deflate}; 

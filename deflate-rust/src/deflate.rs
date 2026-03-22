@@ -1,18 +1,17 @@
-use core::num;
 use std::io::{Result, BufReader, Error, ErrorKind, Read};
 use std::io::{BufWriter};
 use std::fs::File;
 use std::usize;
 use crc32fast::Hasher;
 use std::collections::HashMap;
-use std::mem::ManuallyDrop;
-use std::cmp::{min, max};
+use std::cmp::max;
 
 use crate::bitstream::BitStream;
 use crate::block_type_0::write_block_type_0;
 use crate::block_type_1::write_block_type_1;
+use crate::block_type_2::write_block_type_2;
 
-const USED_BLOCK_TYPE: u32 = 1;
+const USED_BLOCK_TYPE: u32 = 2;
 
 const MAX_REF_DISTANCE: usize = 32768;
 const MAX_REF_LEN: usize = 258;
@@ -98,7 +97,7 @@ fn find_reference(byte_buffer: &Vec<u8>, buffer_idx: usize) -> (usize, usize) {
     let mut ref_dist: usize = 3; 
     let mut ref_len: usize = 0;
 
-    while ref_dist >= 0 {
+    loop {
 
         if ref_dist > buffer_idx || ref_dist >= MAX_REF_DISTANCE {
             break;
@@ -270,9 +269,8 @@ pub fn deflate(in_file_path: &String, out_file_path: &String) -> Result<()>{
     let mut num_unparsed_bytes = in_file_size; 
     let mut hasher = Hasher::new();
 
+    let mut block_size; 
     while  num_unparsed_bytes > 0 {
-
-        let mut block_size = 0; 
 
         match USED_BLOCK_TYPE {
             // block 0
@@ -281,6 +279,9 @@ pub fn deflate(in_file_path: &String, out_file_path: &String) -> Result<()>{
             }
             1 => {
                 block_size = write_block_type_1(&mut in_stream, &mut out_stream, num_unparsed_bytes, &mut hasher)?; 
+            }
+            2 => {
+                block_size = write_block_type_2(&mut in_stream, &mut out_stream, num_unparsed_bytes, &mut hasher)?; 
             }
             _ => {
                 return Err(Error::new(
