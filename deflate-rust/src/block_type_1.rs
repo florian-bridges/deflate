@@ -52,7 +52,7 @@ fn get_default_distance_codes() -> ([u32; DISTANCE_CODE_LIST_LEN], [u32; DISTANC
 
 }
 
-pub fn write_block_type_1(in_stream: &mut BufReader<File>, out_stream: &mut BitStream, num_unparsed_bytes: u64, hasher: &mut Hasher) -> Result<u64> {
+pub fn write_block_type_1(in_stream: &mut BufReader<File>, out_stream: &mut BitStream, num_unparsed_bytes: usize, hasher: &mut Hasher) -> Result<usize> {
 
     // todo change for dynamic block sizes
     let block_size = num_unparsed_bytes; 

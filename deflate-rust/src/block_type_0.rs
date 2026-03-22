@@ -6,9 +6,9 @@ use std::cmp::min;
 
 use crate::bitstream::BitStream;
 
-const BLOCK_0_MAX_SIZE: u64 = u16::MAX as u64;
+const BLOCK_0_MAX_SIZE: usize = u16::MAX as usize;
 
-pub fn write_block_type_0(in_stream: &mut BufReader<File>, out_stream: &mut BitStream, num_unparsed_bytes: u64, hasher: &mut Hasher) -> Result<u64> {
+pub fn write_block_type_0(in_stream: &mut BufReader<File>, out_stream: &mut BitStream, num_unparsed_bytes: usize, hasher: &mut Hasher) -> Result<usize> {
 
     //header
     let block_type = 0; 
