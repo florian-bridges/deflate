@@ -3,8 +3,7 @@ An implementation of the deflate algorithm in python, c, and rust
 
 ## analyze bitstream
 
-[source](https://github.com/billbird/gzstat)
-A tool for analyzing gzip/DEFLATE bitstreams
+A tool for analyzing gzip/DEFLATE bitstreams [source](https://github.com/billbird/gzstat).
 
 ```
 python gzstat.py < your_gzip_file.gz
